@@ -93,7 +93,7 @@ def main():
     all_urls = set()
     deep_url = None
 
-    with httpx.Client(http2=True, timeout=10.0) as client:
+    with httpx.Client(http2=True, timeout=20) as client:
      
         r1 = client.get(url1, headers=HEADERS1)
         r1.raise_for_status()
