@@ -10,6 +10,7 @@ The script works with the GoGoDuck search engine.
 ```bash
 pip install httpx
 pip install httpx[http2]
+pip install brotli
 ```
 
 ## Using
