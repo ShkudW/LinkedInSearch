@@ -9,10 +9,10 @@ from urllib.parse import quote_plus, unquote
 
 
 parser = argparse.ArgumentParser(description="Search LinkedIn profiles by company name")
-parser.add_argument("-CompanyName", required=True, help="The company name to search for")
+parser.add_argument("-Name", required=True, help="The company name to search for")
 args = parser.parse_args()
 
-company = args.CompanyName.strip()
+company = args.Name.strip()
 query = f"site:linkedin.com/in {company}"
 
 
