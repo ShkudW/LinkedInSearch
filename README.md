@@ -1,7 +1,5 @@
 # LinkedInSearch
 
-For any question -> shaked.wiessman@ab-inbev.com
-
 Simple Tool for employees recon (searching trere LinkedIn profile)
 
 1) Create free account in : https://serper.dev (you can use Temp mail https://temp-mail.org/)
