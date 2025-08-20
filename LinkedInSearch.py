@@ -1,126 +1,160 @@
-import httpx
-import re
-import sys
-import brotli
-import json
-import argparse
-from urllib.parse import quote_plus, unquote
+import os, re, json, argparse, time
+from typing import Iterable, List, Dict, Set, Tuple
+import requests
+
+SERPER_ENDPOINT = "https://google.serper.dev/search"
+
+LINKEDIN_PROFILE_RX = re.compile(r"https?://([\w\-]+\.)?linkedin\.com/(in|pub)/", re.I)
+
+NON_NAME_TOKENS = set("""
+ltd limited inc corporation corp gmbh srl bv spa plc llc co company
+technologies technology software systems labs group holdings
+""".split())
+
+LETTER_RX = re.compile(r"^[A-Za-zÀ-ÖØ-öø-ÿ'\-]+$")
 
 
-parser = argparse.ArgumentParser(description="Search LinkedIn profiles by company name")
-parser.add_argument("-Name", required=True, help="The company name to search for")
-args = parser.parse_args()
+def build_queries(query: str) -> List[str]:
 
-company = args.Name.strip()
-query = f"site:linkedin.com/in {company}"
+    q = query.strip().strip('"').strip("'")
+    is_domain = "." in q and " " not in q
+
+    if is_domain:
+        base = q.lower()
+
+        return [
+            f'site:linkedin.com/in ("{base}" OR @{base}) -jobs -hiring',
+            f'site:linkedin.com/in "{base}" ("security" OR "engineer" OR "researcher" OR "developer" OR "sales" OR "marketing") -jobs -hiring',
+            f'site:linkedin.com/pub "{base}" -jobs -hiring',
+        ]
+    else:
+        company = q
+        return [
+            f'site:linkedin.com/in "{company}" -jobs -hiring',
+            f'site:linkedin.com/in "{company}" ("security" OR "engineer" OR "researcher" OR "developer" OR "sales" OR "marketing") -jobs -hiring',
+            f'"{company}" site:linkedin.com/in ("our team" OR "leadership" OR "product" OR "design" OR "operations") -jobs -hiring',
+            f'site:linkedin.com/pub "{company}" -jobs -hiring',
+        ]
 
 
-
-HEADERS1 = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-HEADERS2 = {
-    "Host": "links.duckduckgo.com",
-    "User-Agent": HEADERS1["User-Agent"],
-    "Accept": "*/*",
-    "Accept-Language": HEADERS1["Accept-Language"],
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://duckduckgo.com/",
-    "Sec-Ch-Ua": '"Chromium";v="137", "Not/A)Brand";v="24"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Site": "same-site",
-    "Sec-Fetch-Mode": "no-cors",
-    "Sec-Fetch-Dest": "script",
-    "Priority": "u=1",
-}
-
-def extract_profiles(js_text):
-    names = set()
-    urls = set()
-    next_page = None
-
-    
-    m1 = re.search(
-        r"DDG\.inject\('DDG\.Data\.languages\.resultLanguages',\s*(\{.+?\})\);",
-        js_text
-    )
-    if m1:
-        try:
-            data = json.loads(m1.group(1))
-            for u in data.get("en", []):
-                if "linkedin.com/in/" in u:
-                    urls.add(u)
-        except Exception:
-            pass
-
-    
-    for u, t in re.findall(
-        r'"u":"(https?://[^\"]+?)".+?"t":"(.*?)"', 
-        js_text
-    ):
-        if "linkedin.com/in/" in u:
-            urls.add(u)
-            name = unquote(t.split(" -")[0])
-            names.add(name)
-
-    
-    m3 = re.search(r'"n"\s*:\s*"([^"]+)"', js_text)
-    if m3:
-        next_page = "https://links.duckduckgo.com" + m3.group(1)
-        
-
-    return names, urls, next_page
-
-def fetch_deep_script(client, deep_url):
-    r = client.get(deep_url, headers=HEADERS2)
+def serper_search(api_key: str, q: str, page: int = 1, num: int = 10, gl: str = None, hl: str = "en") -> Dict:
+    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
+    payload = {"q": q, "page": page, "num": num}
+    if gl: payload["gl"] = gl.lower()
+    if hl: payload["hl"] = hl
+    r = requests.post(SERPER_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=30)
     r.raise_for_status()
-    content = r.content
-    try:
-        return brotli.decompress(content).decode('utf-8')
-    except brotli.error:
-        return content.decode(r.encoding or 'utf-8', errors='ignore')
+    return r.json()
+
+
+def clean_name_candidate(text: str) -> List[str]:
+
+    if not text:
+        return []
+
+    t = text.split(" | ")[0]
+    t = t.split("—")[0]
+    t = t.split(" - ")[0]
+    t = t.strip()
+
+
+    t = t.replace(",", " ")
+
+    tokens = [tok for tok in t.split() if tok]
+
+    name_like = [tok for tok in tokens if LETTER_RX.match(tok) and tok.lower() not in NON_NAME_TOKENS]
+
+
+    name_like = [tok for tok in name_like if not (len(tok) >= 2 and tok.isupper())]
+
+
+    common_roles = {"engineer","developer","researcher","manager","director","head","lead","vp","intern",
+                    "student","consultant","owner","founder","co-founder","cto","ceo","cfo","ciso",
+                    "marketing","sales","product","design","security","analyst","administrator"}
+    if name_like and name_like[0].lower() in common_roles and len(name_like) >= 3:
+        name_like = name_like[1:]
+
+    return name_like[:3]
+
+
+def extract_first_last(title: str) -> Tuple[str, str]:
+    toks = clean_name_candidate(title)
+    if len(toks) >= 2:
+        first = toks[0].capitalize()
+        last  = toks[-1].capitalize()
+        if 2 <= len(first) <= 30 and 2 <= len(last) <= 40:
+            return first, last
+    return ("", "")
+
+
+def gather_names_from_serp(serp: Dict) -> Iterable[Tuple[str, str]]:
+    for it in serp.get("organic", []):
+        link = (it.get("link") or "").strip()
+        title = (it.get("title") or "").strip()
+
+        if not link or not title:
+            continue
+        if not LINKEDIN_PROFILE_RX.search(link):
+            continue
+
+        first, last = extract_first_last(title)
+        if first and last:
+            yield (first, last)
+
+
+def run(query: str, pages: int, per_page: int, gl: str, hl: str, delay: float) -> List[Tuple[str, str]]:
+    api_key = os.getenv("SERPER_API_KEY")
+    if not api_key:
+        raise SystemExit("[-] SERPER_API_KEY not in env")
+
+    qlist = build_queries(query)
+    seen: Set[Tuple[str, str]] = set()
+    results: List[Tuple[str, str]] = []
+
+    for q in qlist:
+        for page in range(1, pages + 1):
+            try:
+                data = serper_search(api_key, q=q, page=page, num=per_page, gl=gl, hl=hl)
+            except requests.HTTPError as e:
+                code = getattr(e.response, "status_code", "?")
+                print(f"[!] HTTP {code} on query='{q}' page={page}")
+                break 
+            except Exception as e:
+                print(f"[!] Error on query='{q}' page={page}: {e}")
+                break
+
+            names = list(gather_names_from_serp(data))
+            if not names:
+           
+                break
+
+            for pair in names:
+                if pair not in seen:
+                    seen.add(pair)
+                    results.append(pair)
+
+            time.sleep(delay)
+
+    return results
+
 
 def main():
-    encoded_q = quote_plus(query)
-    url1 = f"https://duckduckgo.com/?t=h_&q={encoded_q}"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-q", "--query", required=True, help="Domain Name")
+    ap.add_argument("--pages", type=int, default=5, help="Number of Pages")
+    ap.add_argument("--per-page", type=int, default=20, help="Number of results")
+    ap.add_argument("--gl", default="", help="Country")
+    ap.add_argument("--hl", default="en", help="Lang")
+    ap.add_argument("--delay", type=float, default=0.7, help="Delay")
+    args = ap.parse_args()
 
-    all_names = set()
-    all_urls = set()
-    deep_url = None
-
-    with httpx.Client(http2=True, timeout=20) as client:
-     
-        r1 = client.get(url1, headers=HEADERS1)
-        r1.raise_for_status()
-        m = re.search(
-            r'<link\s+id="deep_preload_link"[^>]*href="([^"]+)"',
-            r1.text
-        )
-        if not m:
-            print("Not Found deep_preload_link", file=sys.stderr)
-            sys.exit(1)
-        deep_url = m.group(1)
+    names = run(args.query, args.pages, args.per_page, args.gl, args.hl, args.delay)
 
 
-        while deep_url:
-            
-            js = fetch_deep_script(client, deep_url)
-            names, urls, next_page = extract_profiles(js)
+    print(f"\[+]{len(names)} unique names found for '{args.query}':\n")
+    for first, last in sorted(names, key=lambda x: (x[1].lower(), x[0].lower())):
+        print(f"{first} {last}")
 
-            all_names.update(names)
-            all_urls.update(urls)
-
-            if not next_page or (not names and not urls):
-                break
-            deep_url = next_page
-
-    print("\n===== Profiles found =====")
-    for name, url in zip(sorted(all_names), sorted(all_urls)):
-        print(f"{name}: {url}")
 
 if __name__ == "__main__":
     main()
