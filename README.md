@@ -1,19 +1,27 @@
 # LinkedInSearch
 
-A simple Python-based tool for searching for company employees.
+For any question -> shaked.wiessman@ab-inbev.com
 
-The script works with the GoGoDuck search engine.
+Simple Tool for employees recon (searching trere LinkedIn profile)
 
-
-## Install
-
+1) Create free account in : https://serper.dev (you can use Temp mail https://temp-mail.org/)
+2) Take the API Key and export it on Linux machine:
 ```bash
-pip install httpx
-pip install httpx[http2]
-pip install brotli
+export SERPER_API_KEY="XXXXXXXXX"
 ```
-
-## Using
+3) Create enviroment
+```bash
+python3 -m venv LinkedInSearch
+```
+4) Enter the enviroment
+```bash
+Source LinkedInSearch/bin/active
+```
+5) Install:
+```bash
+requests
+```
+6) Usage:
 ```python
-python3 LinkedInSearch.py -Name <Domain | Company Name>
+python3 LinkedInSearch.py -q "Company" --pages 5 --per-page 20
 ```
