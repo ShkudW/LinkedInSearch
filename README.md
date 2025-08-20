@@ -17,7 +17,7 @@ Source LinkedInSearch/bin/active
 ```
 5) Install:
 ```bash
-requests
+pip install requests 
 ```
 6) Usage:
 ```python
